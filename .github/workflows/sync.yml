@@ -1,0 +1,30 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '17 4 * * 0' # Runs every Sunday at 4:17 AM UTC.
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Set fetch-depth to 0 to fetch all history for all branches and tags.
+          # This is necessary for merging histories.
+          fetch-depth: 0
+
+      - name: Set up Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync with upstream
+        run: |
+          git remote add upstream https://github.com/umami-software/umami.git
+          git fetch upstream
+          git checkout master
+          git merge upstream/master
+          git push origin master 
