@@ -8,6 +8,8 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -15,16 +17,55 @@ jobs:
           # Set fetch-depth to 0 to fetch all history for all branches and tags.
           # This is necessary for merging histories.
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Git
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
-      - name: Sync with upstream
+      - name: Add upstream remote
         run: |
-          git remote add upstream https://github.com/umami-software/umami.git
+          git remote add upstream https://github.com/umami-software/umami.git || true
+          git remote set-url upstream https://github.com/umami-software/umami.git
+
+      - name: Fetch upstream changes
+        run: |
           git fetch upstream
+          git fetch origin
+
+      - name: Check if merge is needed
+        id: check-merge
+        run: |
           git checkout master
-          git merge upstream/master
+          UPSTREAM_COMMITS=$(git rev-list --count HEAD..upstream/master)
+          echo "upstream-commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+          if [ $UPSTREAM_COMMITS -eq 0 ]; then
+            echo "no-merge-needed=true" >> $GITHUB_OUTPUT
+            echo "No new commits to merge"
+          else
+            echo "no-merge-needed=false" >> $GITHUB_OUTPUT
+            echo "Found $UPSTREAM_COMMITS new commits to merge"
+          fi
+
+      - name: Merge upstream changes
+        if: steps.check-merge.outputs.no-merge-needed == 'false'
+        run: |
+          # Try to merge with strategy to handle conflicts
+          if ! git merge upstream/master --no-edit; then
+            echo "Merge conflict detected, attempting to resolve..."
+            # Check if there are any local changes that conflict
+            if git diff --quiet HEAD upstream/master; then
+              echo "No actual conflicts, resetting to upstream"
+              git reset --hard upstream/master
+            else
+              echo "Real conflicts detected, aborting merge"
+              git merge --abort
+              exit 1
+            fi
+          fi
+
+      - name: Push changes
+        if: steps.check-merge.outputs.no-merge-needed == 'false'
+        run: |
           git push origin master 
