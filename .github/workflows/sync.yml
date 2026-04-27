@@ -40,7 +40,7 @@ jobs:
           git checkout master
           UPSTREAM_COMMITS=$(git rev-list --count HEAD..upstream/master)
           echo "upstream-commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
-          if [ $UPSTREAM_COMMITS -eq 0 ]; then
+          if [ "${UPSTREAM_COMMITS:-0}" -eq 0 ]; then
             echo "no-merge-needed=true" >> $GITHUB_OUTPUT
             echo "No new commits to merge"
           else
@@ -51,18 +51,24 @@ jobs:
       - name: Merge upstream changes
         if: steps.check-merge.outputs.no-merge-needed == 'false'
         run: |
-          # Try to merge with strategy to handle conflicts
-          if ! git merge upstream/master --no-edit; then
-            echo "Merge conflict detected, attempting to resolve..."
-            # Check if there are any local changes that conflict
-            if git diff --quiet HEAD upstream/master; then
-              echo "No actual conflicts, resetting to upstream"
-              git reset --hard upstream/master
-            else
-              echo "Real conflicts detected, aborting merge"
-              git merge --abort
-              exit 1
-            fi
+          # Keep fork-local workflows unchanged to avoid push rejection for workflow updates.
+          if ! git merge upstream/master --no-ff --no-edit --no-commit; then
+            echo "Merge conflict detected, aborting merge"
+            git merge --abort
+            exit 1
+          fi
+
+          # Drop upstream changes to workflow files before committing.
+          if git diff --name-only --cached -- '.github/workflows/*' | grep -q .; then
+            git restore --source=HEAD --staged --worktree '.github/workflows'
+          fi
+
+          # If nothing remains after filtering workflow files, stop gracefully.
+          if git diff --cached --quiet; then
+            echo "No syncable changes remain after excluding workflow files"
+            echo "no-merge-needed=true" >> $GITHUB_OUTPUT
+          else
+            git commit --no-edit
           fi
 
       - name: Push changes
