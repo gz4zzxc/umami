@@ -1,6 +1,18 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
+// 常量时间比较函数，防范时序攻击（Timing Attack）
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 // 辅助函数：使用 Web Crypto API 生成 SHA-256 哈希签名
 async function sha256(message: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(message);
@@ -19,19 +31,17 @@ export async function middleware(request: NextRequest) {
   }
 
   // =================================================================
-  // 1. 白名单策略：允许公开访问的静态资源与统计相关路由
+  // 1. 白名单策略：放行公开静态资源、脚本与 skipAuth API
   // =================================================================
 
-  // A. 基础静态资源（不包含敏感的 Umami 特征）
-  if (
-    pathname.startsWith('/_next/') ||
-    pathname.startsWith('/static/') ||
-    pathname === '/robots.txt'
-  ) {
+  // A. 放行基础静态资源（不含敏感 Umami 特征且 matcher 无法排除的）
+  // 特别注意：此处已移除 /_next/ 全路径放行，防止通过 /_next/data/ 泄露后台 RSC 数据结构。
+  // matcher 已排除 _next/static 和 _next/image。
+  if (pathname.startsWith('/static/') || pathname === '/robots.txt') {
     return NextResponse.next();
   }
 
-  // B. 放行统计脚本（支持自定义脚本名称，避免广告拦截）
+  // B. 放行统计脚本（支持自定义脚本名称）
   const trackerScripts = ['/script.js', '/telemetry.js'];
   const envTrackerScriptName = process.env.TRACKER_SCRIPT_NAME;
   if (envTrackerScriptName) {
@@ -47,10 +57,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // C. 放行数据收集、系统配置、会话录制与健康检测接口（含自定义 API 端点）
+  // C. 放行公开收集、配置、录制与监控服务 API
   const collectEndpoints = [
     '/api/send',
-    '/api/collect',
     '/api/config',
     '/api/batch',
     '/api/record',
@@ -74,8 +83,8 @@ export async function middleware(request: NextRequest) {
   const tokenCookie = request.cookies.get('umami_access_token')?.value;
 
   // 校验 A：URL 中携带了正确的密钥（如 ?secret=xxx）
-  if (tokenQuery === accessToken) {
-    // 构造无敏感参数的 URL，纯净化地址栏
+  if (tokenQuery && constantTimeEqual(tokenQuery, accessToken)) {
+    // 构造无敏感参数 of URL，纯净化地址栏
     const url = request.nextUrl.clone();
     url.searchParams.delete('token');
     url.searchParams.delete('key');
@@ -92,7 +101,7 @@ export async function middleware(request: NextRequest) {
     response.cookies.set('umami_access_token', cookieValue, {
       path: '/',
       httpOnly: true,
-      secure: true,
+      secure: request.nextUrl.protocol === 'https:', // 动态支持本地非 HTTPS 开发环境
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 365,
     });
@@ -100,15 +109,23 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // 校验 B：Cookie 中包含有效的加密鉴权签名
+  // 校验 B：Cookie 中包含有效的加密鉴权签名，且未过期
   if (tokenCookie) {
     const parts = tokenCookie.split(':');
     if (parts.length === 2) {
       const [timestamp, signature] = parts;
-      const expectedSignature = await sha256(`${timestamp}:${accessToken}`);
 
-      if (signature === expectedSignature) {
-        return NextResponse.next();
+      // 服务端强制校验时间戳有效期（防止凭证泄露后无限期重放，限制为 1 年）
+      const parsedTime = Number.parseInt(timestamp, 10);
+      const isExpired =
+        Number.isNaN(parsedTime) || Date.now() - parsedTime > 365 * 24 * 60 * 60 * 1000;
+
+      if (!isExpired) {
+        const expectedSignature = await sha256(`${timestamp}:${accessToken}`);
+
+        if (constantTimeEqual(signature, expectedSignature)) {
+          return NextResponse.next();
+        }
       }
     }
   }
