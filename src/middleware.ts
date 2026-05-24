@@ -1,7 +1,15 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-export function middleware(request: NextRequest) {
+// 辅助函数：使用 Web Crypto API 生成 SHA-256 哈希签名
+async function sha256(message: string): Promise<string> {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl;
   const accessToken = process.env.ACCESS_TOKEN;
 
@@ -39,8 +47,15 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // C. 放行数据收集接口（支持自定义 API 端点）
-  const collectEndpoints = ['/api/send', '/api/collect'];
+  // C. 放行数据收集、系统配置、会话录制与健康检测接口（含自定义 API 端点）
+  const collectEndpoints = [
+    '/api/send',
+    '/api/collect',
+    '/api/config',
+    '/api/batch',
+    '/api/record',
+    '/api/heartbeat',
+  ];
   const envCollectEndpoint = process.env.COLLECT_API_ENDPOINT;
   if (envCollectEndpoint) {
     collectEndpoints.push(`/${envCollectEndpoint.replace(/^\/+/, '')}`);
@@ -68,8 +83,13 @@ export function middleware(request: NextRequest) {
 
     const response = NextResponse.redirect(url);
 
+    // 生成基于时间戳和 ACCESS_TOKEN 的加密签名，防 Cookie 伪造
+    const timestamp = Date.now().toString();
+    const signature = await sha256(`${timestamp}:${accessToken}`);
+    const cookieValue = `${timestamp}:${signature}`;
+
     // 写入安全鉴权 Cookie，有效期 1 年
-    response.cookies.set('umami_access_token', '1', {
+    response.cookies.set('umami_access_token', cookieValue, {
       path: '/',
       httpOnly: true,
       secure: true,
@@ -80,9 +100,17 @@ export function middleware(request: NextRequest) {
     return response;
   }
 
-  // 校验 B：Cookie 中包含有效的鉴权状态
-  if (tokenCookie === '1') {
-    return NextResponse.next();
+  // 校验 B：Cookie 中包含有效的加密鉴权签名
+  if (tokenCookie) {
+    const parts = tokenCookie.split(':');
+    if (parts.length === 2) {
+      const [timestamp, signature] = parts;
+      const expectedSignature = await sha256(`${timestamp}:${accessToken}`);
+
+      if (signature === expectedSignature) {
+        return NextResponse.next();
+      }
+    }
   }
 
   // =================================================================
