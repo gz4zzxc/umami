@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-// 常量时间比较函数，防范时序攻击（Timing Attack）
+// 常量时间比较函数，对等长输入实现常数时间比较（防范时序攻击）
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) {
     return false;
@@ -41,8 +41,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // B. 放行统计脚本（支持自定义脚本名称）
-  const trackerScripts = ['/script.js', '/telemetry.js'];
+  // B. 放行统计脚本与录制脚本（支持自定义脚本名称）
+  const trackerScripts = ['/script.js', '/telemetry.js', '/recorder.js'];
   const envTrackerScriptName = process.env.TRACKER_SCRIPT_NAME;
   if (envTrackerScriptName) {
     envTrackerScriptName.split(',').forEach(name => {
@@ -150,6 +150,7 @@ export async function middleware(request: NextRequest) {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'X-Robots-Tag': 'noindex, nofollow',
+        'Cache-Control': 'no-store, max-age=0',
       },
     },
   );
