@@ -8,8 +8,7 @@ env:
 
 jobs:
   build:
-    if: github.repository == 'umami-software/umami'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +16,10 @@ jobs:
         with:
           version: 10.15.1
           run_install: false
-      - name: Use Node.js 18.18
+      - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 18.18
+          node-version: 22
           cache: "pnpm"
       - run: pnpm install
       - run: pnpm test
