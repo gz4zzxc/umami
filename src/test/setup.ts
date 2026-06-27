@@ -5,6 +5,30 @@ import { resetTestNavigation } from './navigation';
 
 configure({ testIdAttribute: 'data-test' });
 
+// jsdom (vitest 4) does not expose localStorage/sessionStorage on the global
+// scope, but app code reads them via bare `localStorage`. Provide an in-memory
+// fallback so storage helpers return null instead of crashing on undefined.
+const createMemoryStorage = () => {
+  const store = new Map<string, string>();
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => store.set(key, String(value)),
+    removeItem: (key: string) => store.delete(key),
+    clear: () => store.clear(),
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    get length() {
+      return store.size;
+    },
+  };
+};
+
+if (!globalThis.localStorage) {
+  globalThis.localStorage = createMemoryStorage() as Storage;
+}
+if (!globalThis.sessionStorage) {
+  globalThis.sessionStorage = createMemoryStorage() as Storage;
+}
+
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
